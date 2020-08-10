@@ -4,15 +4,23 @@ from sqlalchemy import Column, Integer, String, Float
 import os
 from flask_marshmallow import Marshmallow
 from flask_jwt_extended import JWTManager, jwt_required, create_access_token
+from flask_mail import Mail, Message
 
 app = Flask(__name__)
 basedir=os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'planets.db')
 app.config['JWT_SECRET_KEY'] = 'super_secret' #change this later
+app.config['MAIL_SERVER']='smtp.mailtrap.io'
+app.config['MAIL_PORT'] = 2525
+app.config['MAIL_USERNAME'] = '81ced89b1c30b5'
+app.config['MAIL_PASSWORD'] = 'e93be68e449b7d'
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USE_SSL'] = False
 
 db=SQLAlchemy(app)
 ma=Marshmallow(app)
 jwt= JWTManager(app)
+mail=Mail(app)
 
 @app.cli.command('db_create')
 def db_create():
@@ -147,6 +155,72 @@ def login():
 		return jsonify(message="Invalid credentials"), 401 #permission denied
 
 
+@app.route('/planet_data/<int:planet_id>')
+def planet_data(planet_id):
+	planet=Planet.query.filter_by(planet_id=planet_id).first()
+
+	if planet:
+		planet_info=planet_schema.dump(planet)
+		return jsonify(planet_info)
+	else:
+		return jsonify(message="planet does not exist"), 404 #not found
+
+
+@app.route('/add_planet',methods=['POST'])
+@jwt_required
+def add_planet():
+	planet_name = request.form.get('planet_name')
+	test = Planet.query.filter_by(planet_name=planet_name).first()
+	if test :
+		return jsonify(message=f'planet {planet_name} already exists in database'), 409
+	else:
+		planet_type = request.form.get('planet_type')
+		home_star = request.form.get('home_star')
+		mass = float(request.form.get('mass'))
+		radius = float(request.form.get('radius'))
+		distance = float(request.form.get('distance'))
+		new_planet = Planet(planet_name = planet_name,
+				   planet_type = planet_type,
+				   home_star = home_star,
+				   mass = mass,
+				   radius = radius,
+				   distance = distance)
+
+		db.session.add(new_planet)
+		db.session.commit()
+		return jsonify(message=f'{planet_name} added to planets'), 201
+
+
+@app.route('/update_planet',methods=['PUT'])
+@jwt_required
+def update_planet():
+	planet_id = int(request.form.get('planet_id'))
+	planet = Planet.query.filter_by(planet_id=planet_id).first()
+	if planet:
+		planet.planet_name = request.form.get('planet_name')
+		planet.planet_type = request.form.get('planet_type')
+		planet.home_star = request.form.get('home_star')
+		planet.mass = float(request.form.get('mass'))
+		planet.radius = float(request.form.get('radius'))
+		planet.distance = float(request.form.get('distance'))
+		db.session.commit()
+		return jsonify(message=f"updated the data of planet {planet.planet_name}")
+	else:	
+		return jsonify(f'the planet with id {planet_id} does not exists in database'), 404
+
+
+@app.route('/remove_planet/<int:planet_id>',methods=['DELETE'])
+@jwt_required
+def remove_planet(planet_id):
+	planet = Planet.query.filter_by(planet_id=planet_id).first()
+	if planet:
+		db.session.delete(planet)
+		db.session.commit()
+		return jsonify(message=f"deleted planet with id {planet_id}"), 202 #change accepted
+	else:
+		return jsonify(f'the planet with id {planet_id} does not exists in database'), 404
+
+
 # database models
 class User(db.Model):
 	__tablename__ = 'users'
@@ -168,8 +242,20 @@ class Planet(db.Model):
 	distance = Column(Float)
 
 
-#marshmallow
+@app.route('/forget_pwd/<string:email>',methods=['GET'])
+def forget_pwd(email):
+	user = User.query.filter_by(email=email).first()
 
+	if user:
+		msg = Message("your api password is "+user.password,sender='admin@api.com',recipients=[email])
+		mail.send(msg)
+		return jsonify(message=f"password sent to {email}")
+	else:
+		return jsonify(message=f"invalid email {email}"), 401
+
+
+
+#marshmallow
 class UserSchema(ma.Schema):
 	class Meta:
 		fields = ('id', 'first_name', 'last_name', 'email', 'password')
